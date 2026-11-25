@@ -1,0 +1,97 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Security Alert Triage</title>
+<style>
+:root{color-scheme:dark;background:#0f1620;color:#edf3fb;font:16px system-ui}
+*{box-sizing:border-box}main{max-width:1170px;margin:auto;padding:39px 23px}h1{font-size:clamp(2.1rem,5vw,3.8rem);letter-spacing:-.05em;margin:0}
+p,label{color:#aabbcd}header p{margin:5px 0 24px}.split{display:grid;grid-template-columns:1.14fr 1fr;gap:13px}
+section{border:1px solid #2b435b;border-radius:12px;background:#172638;padding:15px;min-width:0}
+h2{font-size:1rem;margin:0 0 14px}label{font-size:.83rem}select{background:#111d2b;color:#edf3fb;padding:8px;border:1px solid #3a536b;border-radius:6px;margin-top:4px;font:inherit}
+.toolbar{display:flex;gap:12px;flex-wrap:wrap;margin:0 0 13px}.toolbar label select{display:block}
+table{width:100%;border-collapse:collapse;font-size:.89rem;white-space:nowrap;text-align:left}th,td{padding:9px 6px;border-bottom:1px solid #304459}td:nth-child(2){font-variant-numeric:tabular-nums}tbody tr:hover,tbody tr.active{background:#233a50}
+button{font:inherit;color:#d6e9ff;background:transparent;border:0;cursor:pointer;padding:0}button:focus-visible{outline:2px solid #93c3ff}
+#queue{overflow:auto;max-height:490px}.tag{font-size:.8rem;color:#9fdcc8}.positive{color:#ffd48b}.muted{color:#b4c6de}.metric{display:grid;grid-template-columns:1fr auto;gap:8px;margin:10px 0}
+.bar{grid-column:1/-1;height:6px;background:#2a4055;border-radius:9px;overflow:hidden}.fill{display:block;height:6px;background:#90b9f7}
+.attr{padding:9px 0;border-bottom:1px solid #304459}.attr .bar{margin-top:7px}.attr .fill{background:#71cdaf}.attr .negative{background:#dfa6a0}
+.meta{font-size:.84rem;line-height:1.5}#title{font-size:1.14rem}
+@media(max-width:750px){.split{grid-template-columns:1fr}main{padding:27px 12px}#queue{max-height:310px}}
+</style></head><body><main>
+<header><h1>Security Alert Triage</h1><p>Calibrated incident predictions and local explanations</p></header>
+<div class="split">
+<section><h2>Incident queue</h2><div class="toolbar">
+<label>Model<select id="model"><option value="tree">Gradient boosting</option><option value="mlp">Neural classifier</option></select></label>
+<label>Sort<select id="sort"><option value="risk">Highest true-positive risk</option><option value="index">Case order</option></select></label>
+</div><div id="queue"><table><thead><tr><th>Case</th><th>True-positive risk</th><th>Predicted grade</th></tr></thead><tbody id="cases"></tbody></table></div>
+<p class="meta">Anonymized sample from the organization- and time-held-out test cohort.</p></section>
+<section><h2 id="title">Case</h2><p id="observed" class="meta"></p>
+<div id="scores" aria-label="Calibrated class probabilities"></div>
+<h2 style="margin-top:20px">True-positive explanation</h2>
+<label>Method <select id="method"></select></label><div id="attributions"></div>
+<p id="units" class="meta"></p></section>
+</div></main><script type="application/json" id="evidence">__TRIAGE_DATA__</script>
+<script>
+const items=JSON.parse(document.getElementById('evidence').textContent)
+const $=id=>document.getElementById(id)
+const grades=['Benign positive','False positive','True positive']
+const gradeLabels={BenignPositive:grades[0],FalsePositive:grades[1],TruePositive:grades[2]}
+const methods={tree:[['tree_shap','TreeSHAP'],['tree_lime','LIME']],
+               mlp:[['mlp_ig','Integrated gradients'],['mlp_lime','LIME']]}
+const featureNames={evidence_log:'Evidence count',distinct_alerts_log:'Distinct alerts',
+    distinct_detectors_log:'Distinct detectors',distinct_titles_log:'Distinct alert titles',
+    distinct_entity_types_log:'Distinct entity types',distinct_categories_log:'Distinct categories',
+    impacted_fraction:'Impacted evidence fraction',related_fraction:'Related evidence fraction',
+    hour_sin:'Hour of day (sine)',hour_cos:'Hour of day (cosine)',
+    weekday_sin:'Day of week (sine)',weekday_cos:'Day of week (cosine)'}
+const tagClass=i=>i===2?'tag positive':i===1?'tag muted':'tag'
+const per=v=>(100*v).toFixed(1)+'%'
+const largest=a=>a.indexOf(Math.max(...a))
+let selected=null
+function bar(v,negative=false){
+ const shell=document.createElement('div'),fill=document.createElement('span')
+ shell.className='bar';fill.className='fill'+(negative?' negative':'')
+ fill.style.width=(100*Math.min(1,Math.max(0,v)))+'%'
+ shell.append(fill);return shell
+}
+function render(){
+ const model=$('model').value
+ const rows=[...items]
+ if($('sort').value==='risk') rows.sort((a,b)=>b.scores[model][2]-a.scores[model][2])
+ if(selected===null)selected=rows[0].case
+ const previous=$('method').value
+ $('method').replaceChildren(...methods[model].map(([v,label])=>new Option(label,v)))
+ if(methods[model].some(([v])=>v===previous))$('method').value=previous
+ $('cases').replaceChildren(...rows.map(row=>{
+   const tr=document.createElement('tr'),n=largest(row.scores[model])
+   tr.classList.toggle('active',row.case===selected)
+   const btn=document.createElement('button');btn.textContent='Case '+String(row.case).padStart(2,'0')
+   btn.addEventListener('click',()=>{selected=row.case;render()})
+   tr.insertCell().append(btn)
+   tr.insertCell().textContent=per(row.scores[model][2])
+   const label=tr.insertCell();label.className=tagClass(n);label.textContent=grades[n]
+   return tr
+ }))
+ details()
+}
+function details(){
+ const row=items.find(v=>v.case===selected), method=$('method').value,model=$('model').value
+ $('title').textContent='Case '+String(row.case).padStart(2,'0')
+ $('observed').textContent='Recorded analyst grade · '+gradeLabels[row.observed_grade]
+ $('scores').replaceChildren(...row.scores[model].map((v,i)=>{
+   const tile=document.createElement('div'),label=document.createElement('span'),number=document.createElement('strong')
+   tile.className='metric';label.textContent=grades[i];label.className=tagClass(i);number.textContent=per(v)
+   tile.append(label,number,bar(v));return tile
+ }))
+ const entries=row.explanations[method], max=Math.max(.00001,...entries.map(r=>Math.abs(r.value)))
+ $('attributions').replaceChildren(...entries.map(entry=>{
+   const card=document.createElement('div');card.className='attr'
+   const name=featureNames[entry.feature]||entry.feature.replaceAll('_',' ')
+   card.textContent=name+' · '+(entry.value>=0?'+':'')+entry.value.toFixed(3)
+   card.append(bar(Math.abs(entry.value)/max,entry.value<0));return card
+ }))
+ $('units').textContent=method.includes('lime')?
+   'Surrogate probability weights. Bar length is relative to this case’s largest contribution.':
+   'True-positive logit contributions. Bar length is relative to this case’s largest contribution.'
+}
+for(const id of ['model','sort'])$(id).addEventListener('change',render)
+$('method').addEventListener('change',details)
+render()
+</script></body></html>

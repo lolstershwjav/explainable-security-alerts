@@ -1,0 +1,12 @@
+{
+  "seeds": [7, 27, 47],
+  "max_training": 18000,
+  "max_validation": 8000,
+  "max_calibration": 8000,
+  "max_test": 12000,
+  "mlp_epochs": 20,
+  "explain_rows": 60,
+  "lime_samples": 480,
+  "top_k": 3,
+  "queue_budget": 0.10
+}
